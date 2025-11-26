@@ -16,7 +16,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from defi_monitor import VaultConfig, UserConfig, VoltrVaultMonitor
-from vault_adapter import VaultAdapter, VoltrAdapter
+from adapters.vault.abstract import VaultAdapter
+from adapters.vault.voltr import VoltrAdapter
+from risk.risk_factory import evaluate as evaluate_risk_model
 
 
 class SnapshotRequest(BaseModel):
@@ -54,6 +56,72 @@ ADAPTERS: Dict[str, VaultAdapter] = {
 }
 
 app = FastAPI(title="Defi Monitor API", version="0.1.0")
+
+HARD_LIMIT_MULTIPLIER = 50
+SOFT_LIMIT_MULTIPLIER = 200
+
+
+def evaluate_risk_status(utilization: float, available: float, balance_value: float) -> Dict[str, object]:
+    """
+    Mirror the frontend risk rules to keep consistent UX:
+      rule1Hard: available < balance * HARD_LIMIT_MULTIPLIER
+      rule2Soft: available < balance * SOFT_LIMIT_MULTIPLIER
+      rule3Hard: utilization > 95%
+      rule4Soft: utilization > 90%
+    """
+    rule1Hard = available < balance_value * HARD_LIMIT_MULTIPLIER
+    rule2Soft = available < balance_value * SOFT_LIMIT_MULTIPLIER
+    rule3Hard = utilization > 95
+    rule4Soft = utilization > 90
+
+    if rule1Hard and rule3Hard:
+        return {
+            "code": "critical13",
+            "label": "Critical 1+3",
+            "badge": "1+3",
+            "tooltip": "Rules 1 + 3: available < balance x 50 and utilization > 95% at the same time.",
+            "conditions": {"rule1Hard": rule1Hard, "rule2Soft": rule2Soft, "rule3Hard": rule3Hard, "rule4Soft": rule4Soft},
+        }
+    if rule1Hard:
+        return {
+            "code": "critical1",
+            "label": "Critical 1",
+            "badge": "1",
+            "tooltip": "Rule 1 (hard liquidity): available < balance x 50. Exit is highly constrained.",
+            "conditions": {"rule1Hard": rule1Hard, "rule2Soft": rule2Soft, "rule3Hard": rule3Hard, "rule4Soft": rule4Soft},
+        }
+    if rule2Soft:
+        return {
+            "code": "warning2",
+            "label": "Warning 2",
+            "badge": "2",
+            "tooltip": "Rule 2 (soft liquidity): available < balance x 200. Monitor exit liquidity.",
+            "conditions": {"rule1Hard": rule1Hard, "rule2Soft": rule2Soft, "rule3Hard": rule3Hard, "rule4Soft": rule4Soft},
+        }
+    if rule3Hard:
+        return {
+            "code": "warning3",
+            "label": "Warning 3",
+            "badge": "3",
+            "tooltip": "Rule 3 (hard utilization): utilization > 95%; lending is crowded.",
+            "conditions": {"rule1Hard": rule1Hard, "rule2Soft": rule2Soft, "rule3Hard": rule3Hard, "rule4Soft": rule4Soft},
+        }
+    if rule4Soft:
+        return {
+            "code": "warning4",
+            "label": "Warning 4",
+            "badge": "4",
+            "tooltip": "Rule 4 (soft utilization): utilization > 90%; approaching congestion.",
+            "conditions": {"rule1Hard": rule1Hard, "rule2Soft": rule2Soft, "rule3Hard": rule3Hard, "rule4Soft": rule4Soft},
+        }
+
+    return {
+        "code": "ok",
+        "label": "Low",
+        "badge": "",
+        "tooltip": "No risk rules triggered.",
+        "conditions": {"rule1Hard": rule1Hard, "rule2Soft": rule2Soft, "rule3Hard": rule3Hard, "rule4Soft": rule4Soft},
+    }
 
 def load_registry() -> Dict[str, Dict[Optional[str], Dict[str, str]]]:
     """
@@ -110,6 +178,64 @@ def resolve_adapter(name: str) -> VaultAdapter:
     return adapter
 
 
+def attach_summary(snapshot: Dict[str, object], vault_cfg_raw: Dict[str, str], adapter_name: str) -> Dict[str, object]:
+    """
+    Guarantee UI-friendly fields are present (name, chain, risk, balance, totalLiquidity, borrowed, myDeposit).
+    """
+    sources = snapshot.get("sources", {}) if isinstance(snapshot, dict) else {}
+    onchain = sources.get("onchain_idle", {}) if isinstance(sources, dict) else {}
+    offchain = sources.get("offchain", {}) if isinstance(sources, dict) else {}
+
+    onchain_data = onchain.get("data") if isinstance(onchain, dict) else None
+    offchain_data = offchain.get("data") if isinstance(offchain, dict) else None
+
+    vault_nav_idle = 0.0
+    user_lp = 0.0
+    withdrawable = 0.0
+
+    if isinstance(onchain_data, dict):
+        vault_nav_idle = float(onchain_data.get("vault_nav_idle", 0.0) or 0.0)
+        user_lp = float(onchain_data.get("user_lp", 0.0) or 0.0)
+    if isinstance(offchain_data, dict):
+        withdrawable = float(offchain_data.get("withdrawable_usdc", 0.0) or 0.0)
+
+    display_name = vault_cfg_raw.get("display_name") or vault_cfg_raw.get("name") or f"{adapter_name} vault"
+    chain = vault_cfg_raw.get("chain") or "UNKNOWN"
+    balance_value = withdrawable if withdrawable else vault_nav_idle or user_lp
+
+    borrowed = float(vault_cfg_raw.get("borrowed", 0.0) or 0.0)
+    total_liquidity = vault_nav_idle or borrowed  # fallback to avoid div by zero
+    available = max(total_liquidity - borrowed, 0.0)
+    utilization = (borrowed / total_liquidity * 100) if total_liquidity else 0.0
+    risk_status = evaluate_risk_status(utilization=utilization, available=available, balance_value=balance_value)
+    protocol_type = vault_cfg_raw.get("type", "vault")
+    risk_model = evaluate_risk_model(
+        protocol_type,
+        {
+            "utilization": utilization,
+            "available": available,
+            "balance_value": balance_value,
+            "idle_ratio": idle_ratio,
+            "deployment_rate": deployment_rate,
+        },
+    )
+
+    summary = {
+        "name": display_name,
+        "chain": chain,
+        "risk": risk_status.get("label", "UNKNOWN"),
+        "balance": f"${withdrawable:,.2f}",
+        "totalLiquidity": total_liquidity,
+        "borrowed": borrowed,
+        "myDeposit": user_lp,
+        "riskStatus": risk_status,
+        "riskModel": risk_model,
+    }
+
+    snapshot["summary"] = summary
+    return snapshot
+
+
 @app.get("/health")
 def health() -> Dict[str, object]:
     return {
@@ -135,7 +261,7 @@ def snapshot(payload: SnapshotRequest) -> Dict[str, object]:
     user_cfg = UserConfig(wallet=payload.wallet, lp_token_account=payload.lp_token_account)
 
     snap = monitor.snapshot(vault_cfg, user_cfg, include_token_accounts=payload.include_token_accounts)
-    return snap
+    return attach_summary(snap, vault_cfg_raw, adapter_name=payload.adapter)
 
 
 # Frontend-friendly: use server-side registry; client only sends protocol + user.
@@ -165,7 +291,8 @@ def monitor_endpoint(payload: MonitorRequest) -> Dict[str, object]:
 
     user_cfg = UserConfig(wallet=payload.user_wallet, lp_token_account=lp_token_account)
     monitor = VoltrVaultMonitor(session=session, adapter=adapter)
-    return monitor.snapshot(vault_cfg, user_cfg, include_token_accounts=payload.include_token_accounts)
+    snap = monitor.snapshot(vault_cfg, user_cfg, include_token_accounts=payload.include_token_accounts)
+    return attach_summary(snap, vault_cfg_raw, adapter_name=payload.protocol)
 
 
 # Convenience: GET endpoint using server defaults (env-driven)
@@ -192,4 +319,5 @@ def snapshot_default(include_token_accounts: bool = False, adapter: str = "voltr
         lp_token_account=vault_cfg_raw.get("default_lp_token_account", "BKCANLpd7r1k1dkki4Wj48kJZXd7CFFEzNnZXQGTrMk1"),
     )
 
-    return monitor.snapshot(vault_cfg, user_cfg, include_token_accounts=include_token_accounts)
+    snap = monitor.snapshot(vault_cfg, user_cfg, include_token_accounts=include_token_accounts)
+    return attach_summary(snap, vault_cfg_raw, adapter_name=adapter)

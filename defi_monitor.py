@@ -4,7 +4,8 @@ from typing import Any, Dict, Optional
 
 import requests
 
-from vault_adapter import VaultAdapter, VoltrAdapter
+from adapters.vault.abstract import VaultAdapter
+from adapters.vault.voltr import VoltrAdapter
 
 
 @dataclass

@@ -7,7 +7,11 @@
       "usdc_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       "rpc_url": "https://api.mainnet-beta.solana.com",
       "voltr_api_base": "https://api.voltr.xyz",
-      "default_lp_token_account": "BKCANLpd7r1k1dkki4Wj48kJZXd7CFFEzNnZXQGTrMk1"
+      "default_lp_token_account": "BKCANLpd7r1k1dkki4Wj48kJZXd7CFFEzNnZXQGTrMk1",
+      "display_name": "vectis jlp-hyper-loop",
+      "chain": "Solana",
+      "type": "vault",
+      "risk": "HIGH"
     }
   }
 }
