@@ -1,0 +1,13 @@
+{
+  "voltr": {
+    "default": {
+      "vault_pubkey": "FajosXiYhqUDZ9cEB3pwS8n8pvcAbL3KzCGZnWDNvgLa",
+      "lp_mint": "A5dvM5NKnuo6tmwoiEFC22qcXcUsa6mUoUtpkxjm1gKg",
+      "idle_usdc_ata": "3AK6wAysksFRke6KJasnnL1sFn73jqhwDNquR2WhgrhE",
+      "usdc_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "rpc_url": "https://api.mainnet-beta.solana.com",
+      "voltr_api_base": "https://api.voltr.xyz",
+      "default_lp_token_account": "BKCANLpd7r1k1dkki4Wj48kJZXd7CFFEzNnZXQGTrMk1"
+    }
+  }
+}
